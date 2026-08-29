@@ -1,0 +1,9 @@
+# Keeps these out of the build context, so Docker doesn't send them to the
+# daemon and (more importantly) they can't accidentally end up in the image.
+__pycache__/
+*.pyc
+.venv/
+.git/
+.github/
+infra/
+README.md
