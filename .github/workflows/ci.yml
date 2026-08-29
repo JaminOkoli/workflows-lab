@@ -1,0 +1,50 @@
+# This is the simplest kind of workflow: one file, triggered directly by
+# GitHub events. No composite actions or reusable workflows yet - just the
+# basics, so those later concepts have something to compare against.
+name: CI
+
+# "on:" defines WHEN this workflow runs.
+# - push: runs whenever commits land on any branch (here, just main for us)
+# - pull_request: runs whenever a PR is opened/updated against main
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    # Where the job's steps actually execute - a fresh GitHub-hosted VM.
+    runs-on: ubuntu-latest
+
+    # "strategy: matrix" runs this SAME job multiple times in parallel, once
+    # per value listed - here, once on Python 3.11 and once on 3.12. Each
+    # combination shows up as its own separate run in the Actions UI.
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.12"]
+
+    steps:
+      # "uses:" pulls in a pre-built action from the GitHub Marketplace
+      # instead of writing the logic yourself. This one clones your repo
+      # onto the runner.
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Installs the Python version for this matrix leg, and - via the
+      # "cache" input - reuses previously-downloaded pip packages instead of
+      # re-downloading them every run (much faster after the first run).
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+          cache-dependency-path: app/requirements-dev.txt
+
+      - name: Install dependencies
+        working-directory: app
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        working-directory: app
+        run: pytest -v
