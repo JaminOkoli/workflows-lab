@@ -1,0 +1,109 @@
+# A REUSABLE WORKFLOW: a whole workflow (job, steps, everything) that other
+# workflows can call, instead of one step like a composite action. Notice
+# `on: workflow_call` below instead of `push`/`pull_request` - that's what
+# makes this callable from another workflow rather than triggered directly
+# by GitHub events. release.yml (Stage 5) will call this one.
+#
+# A workflow with ONLY `workflow_call` never gets a manual "Run workflow"
+# button in the UI - it can only be invoked by another workflow. We also
+# add `workflow_dispatch` below (same inputs) so this one can be run
+# standalone too, for testing before release.yml exists.
+name: Build and Push
+
+on:
+  workflow_call:
+    # Reusable workflows declare their own inputs - the CALLER passes these
+    # in via `with:` when it does `uses: ./.github/workflows/build-and-push.yml`.
+    # None of these are secret, so they're plain inputs, not `secrets:`.
+    inputs:
+      workload_identity_provider:
+        required: true
+        type: string
+      service_account_email:
+        required: true
+        type: string
+      gcp_project_id:
+        required: true
+        type: string
+      artifact_registry_region:
+        required: true
+        type: string
+      artifact_registry_repo:
+        required: true
+        type: string
+      image_name:
+        required: false
+        type: string
+        default: "workflows-lab"
+    # This is the payoff of using workflow_call: the caller can read
+    # whatever this workflow produces. Here, the exact image tag we just
+    # built, so the caller can hand it straight to deploy.yml.
+    outputs:
+      image_tag:
+        description: "Full image reference (including tag) that was pushed"
+        value: ${{ jobs.build-and-push.outputs.image_tag }}
+
+  # Same inputs, so you can trigger this manually from the Actions tab
+  # ("Run workflow" button) while testing, before release.yml exists.
+  workflow_dispatch:
+    inputs:
+      workload_identity_provider:
+        required: true
+        type: string
+      service_account_email:
+        required: true
+        type: string
+      gcp_project_id:
+        required: true
+        type: string
+      artifact_registry_region:
+        required: true
+        type: string
+      artifact_registry_repo:
+        required: true
+        type: string
+      image_name:
+        required: false
+        type: string
+        default: "workflows-lab"
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    # Job-level outputs feed the workflow-level `outputs:` above.
+    outputs:
+      image_tag: ${{ steps.vars.outputs.image_tag }}
+    # id-token: write is what lets google-github-actions/auth exchange
+    # this run's identity for short-lived GCP credentials (WIF).
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      # Builds the full image reference once, as a step output, so every
+      # later step (and the job/workflow outputs) reference the exact same
+      # string instead of re-building it in multiple places.
+      - name: Compute image tag
+        id: vars
+        run: |
+          SHORT_SHA=${GITHUB_SHA:0:7}
+          HOST="${{ inputs.artifact_registry_region }}-docker.pkg.dev"
+          IMAGE="$HOST/${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.image_name }}:$SHORT_SHA"
+          echo "image_tag=$IMAGE" >> "$GITHUB_OUTPUT"
+
+      # This is the composite action from Stage 2, called from inside a
+      # reusable workflow - one step here does the work of 3 login steps.
+      - name: Authenticate to GCP
+        uses: ./.github/actions/gcp-auth
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account_email: ${{ inputs.service_account_email }}
+          artifact_registry_host: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
+
+      - name: Build image
+        run: docker build -t ${{ steps.vars.outputs.image_tag }} .
+
+      - name: Push image to Artifact Registry
+        run: docker push ${{ steps.vars.outputs.image_tag }}
