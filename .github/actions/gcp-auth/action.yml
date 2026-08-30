@@ -1,0 +1,48 @@
+# A COMPOSITE ACTION: a reusable bundle of *steps*, not a whole workflow.
+# It lives in its own folder as action.yml, and gets called from inside a
+# job with `uses: ./.github/actions/gcp-auth` - as if it were one step.
+#
+# Why this exists: both build-and-push.yml and deploy.yml need to log into
+# GCP the exact same way. Instead of pasting these 3 steps into both files
+# (and having to update both if the login steps ever change), we write it
+# once here and call it from both places.
+
+name: "gcp-auth"
+description: "Authenticate to GCP via Workload Identity Federation, set up gcloud, and configure Docker for Artifact Registry"
+
+# Composite actions declare their own inputs, just like a workflow does -
+# the caller passes these in via `with:`.
+inputs:
+  workload_identity_provider:
+    description: "Full resource name of the WIF provider (projects/.../workloadIdentityPools/.../providers/...)"
+    required: true
+  service_account_email:
+    description: "Email of the GCP service account to impersonate"
+    required: true
+  artifact_registry_host:
+    description: "Artifact Registry hostname to authenticate Docker against (e.g. us-central1-docker.pkg.dev)"
+    required: true
+
+# "using: composite" is what makes this a composite action, as opposed to
+# a Docker-container or JavaScript action (the other two types).
+runs:
+  using: "composite"
+  steps:
+    # Exchanges GitHub's OIDC token for short-lived GCP credentials - no
+    # long-lived JSON key involved.
+    - name: Authenticate to GCP (Workload Identity Federation)
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.service_account_email }}
+
+    # Installs the gcloud CLI on the runner, already logged in as the
+    # identity from the step above.
+    - name: Set up gcloud CLI
+      uses: google-github-actions/setup-gcloud@v2
+
+    # Lets a plain `docker push` later authenticate against Artifact
+    # Registry, using the same gcloud credentials.
+    - name: Configure Docker for Artifact Registry
+      shell: bash
+      run: gcloud auth configure-docker ${{ inputs.artifact_registry_host }} --quiet
