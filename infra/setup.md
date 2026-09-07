@@ -135,9 +135,11 @@ gcloud iam service-accounts create "$SA_NAME" \
 
 export SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
-# Least-privilege roles: push images, tunnel SSH via IAP, log into the VM,
-# and look up the VM's IP.
-for ROLE in roles/artifactregistry.writer roles/iap.tunnelResourceAccessor roles/compute.osLogin roles/compute.viewer; do
+# Least-privilege roles: push images, tunnel SSH via IAP, log into the VM as
+# an admin (deploy.yml needs passwordless sudo to run docker - a plain
+# compute.osLogin account would get prompted for a sudo password, which
+# fails in a non-interactive SSH session), and look up the VM's IP.
+for ROLE in roles/artifactregistry.writer roles/iap.tunnelResourceAccessor roles/compute.osAdminLogin roles/compute.viewer; do
   gcloud projects add-iam-policy-binding "$PROJECT_ID" \
     --member="serviceAccount:${SA_EMAIL}" \
     --role="$ROLE"
