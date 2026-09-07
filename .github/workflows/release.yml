@@ -1,0 +1,59 @@
+# The ORCHESTRATOR. Nothing new syntactically beyond what you've already
+# used - this file's whole job is to chain the two reusable workflows
+# together and wire real values into them automatically, replacing the
+# manual "copy-paste into a form" testing you've been doing until now.
+name: Release
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  # The manual "Run workflow" button - useful for re-deploying the current
+  # main without needing a new commit.
+  workflow_dispatch:
+
+# If a second push to main lands while a release is still running, cancel
+# the older, now-stale run instead of letting both finish (whichever
+# finishes last would otherwise "win" and could redeploy an old image).
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # A job that calls a reusable workflow can ONLY have: needs, if,
+  # permissions, uses, with, secrets - no runs-on/steps, since all of that
+  # lives inside build-and-push.yml itself.
+  build:
+    uses: ./.github/workflows/build-and-push.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      # "vars.*" reads the repo Variables you saved earlier in GitHub
+      # Settings - the same values you'd been pasting into the manual
+      # "Run workflow" form by hand until now.
+      workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+      service_account_email: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+      artifact_registry_region: ${{ vars.GCP_AR_REGION }}
+      artifact_registry_repo: ${{ vars.GCP_AR_REPO }}
+
+  deploy:
+    # Waits for "build" to finish, and can read its outputs - this is the
+    # same job-dependency mechanism as within a single workflow, just
+    # spanning two reusable-workflow calls instead of two plain jobs.
+    needs: build
+    uses: ./.github/workflows/deploy.yml
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      # The exact image tag build-and-push.yml just pushed - no manual
+      # copy-pasting required anymore.
+      image_tag: ${{ needs.build.outputs.image_tag }}
+      workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+      service_account_email: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
+      gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
+      artifact_registry_region: ${{ vars.GCP_AR_REGION }}
+      vm_name: ${{ vars.GCP_VM_NAME }}
+      vm_zone: ${{ vars.GCP_VM_ZONE }}
