@@ -46,6 +46,7 @@ Dockerfile
     deploy.yml             reusable workflow: SSH to VM, pull + restart container
     release.yml             orchestrator: calls build-and-push -> deploy
     nightly-healthcheck.yml bonus: scheduled trigger, curls /health on the VM
+    pr-jira-sync.yml         bonus: on PR open, pulls the Jira ticket and rewrites the PR title/description
 infra/
   setup.md               one-time manual gcloud steps (project, VM, WIF, etc.)
 README.md                 you are here
@@ -111,6 +112,20 @@ ahead, since later stages reuse things earlier stages build.
       `pull_request_target` (a real security gotcha), and a status badge.
       *Verify:* manually trigger it (scheduled workflows support
       `workflow_dispatch` too) and confirm it succeeds.
+
+- [ ] **Stage 7 — `pr-jira-sync.yml`, calling an external API from a workflow.**
+      Triggers on `pull_request: types: [opened]`. Extracts a Jira ticket ID
+      (e.g. `PROJ-123`) from the branch name with a regex, calls the Jira
+      REST API (using a Jira API token stored as a repo secret) to fetch
+      that ticket's summary/description, then calls the GitHub API to
+      rewrite the PR's title and description with the real ticket content.
+      *Teaches:* a new trigger filter (`types: [opened]`), calling an
+      external (non-GCP) API from a workflow, using a real secret (unlike
+      everything else in this project, which is keyless), and editing a PR
+      programmatically via the GitHub API/CLI.
+      *Verify:* open a branch named like `PROJ-123-some-change`, open a PR
+      from it, confirm the title/description get rewritten from the Jira
+      ticket automatically.
 
 ## GCP one-time setup
 
