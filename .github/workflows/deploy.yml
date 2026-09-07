@@ -68,6 +68,13 @@ jobs:
       contents: read
       id-token: write
     steps:
+      # Any local action reference (uses: ./path) needs the repo's files on
+      # the runner first - GitHub doesn't do this for you automatically.
+      # Without this step, ./.github/actions/gcp-auth doesn't exist yet on
+      # the runner's disk and the next step fails.
+      - name: Check out code
+        uses: actions/checkout@v4
+
       # Same composite action as build-and-push.yml, second time it's used.
       - name: Authenticate to GCP
         uses: ./.github/actions/gcp-auth
