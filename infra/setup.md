@@ -88,6 +88,19 @@ systemctl enable docker
 systemctl start docker'
 ```
 
+Also turn on **OS Login** for this VM. This is what lets `roles/compute.osLogin`
+(granted to the deploy service account in step 7) actually work — without it,
+`gcloud compute ssh` falls back to writing SSH keys straight into instance
+metadata instead, which needs a different, broader permission we deliberately
+didn't grant.
+
+```bash
+gcloud compute instances add-metadata "$VM_NAME" \
+  --project="$PROJECT_ID" \
+  --zone="$ZONE" \
+  --metadata enable-oslogin=TRUE
+```
+
 ## 6. Firewall rules
 
 Two separate rules, on purpose: SSH stays private (IAP only), the app port
