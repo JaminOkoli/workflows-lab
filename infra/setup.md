@@ -144,6 +144,24 @@ for ROLE in roles/artifactregistry.writer roles/iap.tunnelResourceAccessor roles
 done
 ```
 
+GCP also requires the SSH-ing identity to hold `iam.serviceAccountUser` on
+the *VM's own* attached service account (a separate check from
+`compute.osLogin` above) - otherwise `gcloud compute ssh` fails with
+`PERMISSION_DENIED: ... iam.serviceAccounts.actAs`. Since the VM was created
+without `--service-account`, it's using the default Compute Engine service
+account, so grant access to that one specifically (not project-wide):
+
+```bash
+export VM_DEFAULT_SA=$(gcloud compute instances describe "$VM_NAME" \
+  --project="$PROJECT_ID" --zone="$ZONE" \
+  --format="value(serviceAccounts[0].email)")
+
+gcloud iam service-accounts add-iam-policy-binding "$VM_DEFAULT_SA" \
+  --project="$PROJECT_ID" \
+  --member="serviceAccount:${SA_EMAIL}" \
+  --role="roles/iam.serviceAccountUser"
+```
+
 ## 8. Set up Workload Identity Federation
 
 This is the keyless part: it lets GitHub Actions runs from *this specific
