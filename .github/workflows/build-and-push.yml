@@ -91,6 +91,7 @@ jobs:
           SHORT_SHA=${GITHUB_SHA:0:7}
           HOST="${{ inputs.artifact_registry_region }}-docker.pkg.dev"
           IMAGE="$HOST/${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.image_name }}:$SHORT_SHA"
+          echo "Image tag: $IMAGE"
           echo "image_tag=$IMAGE" >> "$GITHUB_OUTPUT"
 
       # This is the composite action from Stage 2, called from inside a
