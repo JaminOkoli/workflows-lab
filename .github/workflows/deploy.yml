@@ -1,0 +1,105 @@
+# Second REUSABLE WORKFLOW. Notice it calls the SAME gcp-auth composite
+# action as build-and-push.yml - this is the whole point of Stage 2: write
+# the login steps once, reuse them from two different reusable workflows
+# instead of copy-pasting.
+name: Deploy
+
+on:
+  workflow_call:
+    inputs:
+      image_tag:
+        description: "Full image reference to deploy (output of build-and-push.yml)"
+        required: true
+        type: string
+      workload_identity_provider:
+        required: true
+        type: string
+      service_account_email:
+        required: true
+        type: string
+      gcp_project_id:
+        required: true
+        type: string
+      artifact_registry_region:
+        required: true
+        type: string
+      vm_name:
+        required: true
+        type: string
+      vm_zone:
+        required: true
+        type: string
+
+  # Same inputs again, so this can be run standalone (Actions tab -> Run
+  # workflow) before release.yml exists to call it automatically.
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        required: true
+        type: string
+      workload_identity_provider:
+        required: true
+        type: string
+      service_account_email:
+        required: true
+        type: string
+      gcp_project_id:
+        required: true
+        type: string
+      artifact_registry_region:
+        required: true
+        type: string
+      vm_name:
+        required: true
+        type: string
+      vm_zone:
+        required: true
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # This is the manual approval gate. "production" must first be created
+    # under repo Settings -> Environments, with "Required reviewers" turned
+    # on - once that's set, this job PAUSES here and waits for someone to
+    # click Approve in the Actions UI before it runs any further.
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # Same composite action as build-and-push.yml, second time it's used.
+      - name: Authenticate to GCP
+        uses: ./.github/actions/gcp-auth
+        with:
+          workload_identity_provider: ${{ inputs.workload_identity_provider }}
+          service_account_email: ${{ inputs.service_account_email }}
+          artifact_registry_host: ${{ inputs.artifact_registry_region }}-docker.pkg.dev
+
+      # The VM's own service account was never granted Artifact Registry
+      # access (kept minimal on purpose). Instead, we mint a short-lived
+      # access token from the identity we already have on the runner (via
+      # WIF above) and hand it to the VM over SSH just for this one login.
+      # "::add-mask::" tells GitHub Actions to redact this value from all
+      # log output from this point on, even though it wasn't a stored
+      # secret to begin with - a good habit for anything sensitive you
+      # generate dynamically inside a run.
+      - name: Mint short-lived Docker access token
+        id: token
+        run: |
+          TOKEN=$(gcloud auth print-access-token)
+          echo "::add-mask::$TOKEN"
+          echo "token=$TOKEN" >> "$GITHUB_OUTPUT"
+
+      # Connects over an IAP tunnel (no public port 22 involved), then runs
+      # one remote shell command: log Docker into Artifact Registry using
+      # the token above, pull the new image, and swap it in for the running
+      # container.
+      - name: Pull image and restart container on the VM
+        run: |
+          gcloud compute ssh "${{ inputs.vm_name }}" \
+            --project="${{ inputs.gcp_project_id }}" \
+            --zone="${{ inputs.vm_zone }}" \
+            --tunnel-through-iap \
+            --quiet \
+            --command="echo '${{ steps.token.outputs.token }}' | sudo docker login -u oauth2accesstoken --password-stdin https://${{ inputs.artifact_registry_region }}-docker.pkg.dev && sudo docker pull ${{ inputs.image_tag }} && (sudo docker stop app || true) && (sudo docker rm app || true) && sudo docker run -d --name app -p 8000:8000 ${{ inputs.image_tag }}"
