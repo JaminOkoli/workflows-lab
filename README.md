@@ -47,6 +47,7 @@ Dockerfile
     release.yml             orchestrator: calls build-and-push -> deploy
     nightly-healthcheck.yml bonus: scheduled trigger, curls /health on the VM
     pr-jira-sync.yml         bonus: on PR open, pulls the Jira ticket and rewrites the PR title/description
+    auto-tag.yml              bonus: on merge to main, auto-creates the next v* tag, which triggers release.yml
 infra/
   setup.md               one-time manual gcloud steps (project, VM, WIF, etc.)
 README.md                 you are here
@@ -126,6 +127,25 @@ ahead, since later stages reuse things earlier stages build.
       *Verify:* open a branch named like `PROJ-123-some-change`, open a PR
       from it, confirm the title/description get rewritten from the Jira
       ticket automatically.
+
+- [ ] **Stage 8 — `auto-tag.yml`, closing the loop on `release.yml`'s tag
+      trigger.** Right now nothing actually creates the `v*` tags that
+      `release.yml` listens for — they'd have to be pushed by hand. This
+      workflow triggers on merge to `main`, reads commit messages since the
+      last tag (conventional-commit style: `fix:`, `feat:`, `feat!:`) to
+      decide the next version bump, and creates + pushes that `vX.Y.Z` tag
+      automatically using a marketplace action (e.g.
+      `mathieudutour/github-tag-action`) — which in turn fires
+      `release.yml`'s existing tag trigger, same as if you'd pushed it
+      yourself.
+      *Teaches:* a workflow whose entire job is to trigger *another*
+      workflow indirectly (by creating the event it listens for, rather
+      than calling it directly), conventional-commit-based versioning, the
+      difference between a workflow calling another workflow (`uses:`) vs.
+      one workflow's side effect (a new tag) triggering a separate one.
+      *Verify:* merge a PR with a `fix:`-prefixed commit message, confirm a
+      new `v*` tag appears automatically, and that it kicks off a fresh
+      `release.yml` run.
 
 ## GCP one-time setup
 
