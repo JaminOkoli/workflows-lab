@@ -58,12 +58,12 @@ README.md                 you are here
 Work through these in order. Each stage is a working checkpoint — don't skip
 ahead, since later stages reuse things earlier stages build.
 
-- [ ] **Stage 0 — App & Docker.** Minimal FastAPI app + `Dockerfile` +
+- [x] **Stage 0 — App & Docker.** Minimal FastAPI app + `Dockerfile` +
       `.dockerignore`. Build and run it locally to confirm the artifact works
       before any automation touches it. No GitHub Actions yet.
       *Verify:* `docker run` the image, `curl localhost:8000/health` → 200.
 
-- [ ] **Stage 1 — `ci.yml`, your first workflow.** Triggers on `push` and
+- [x] **Stage 1 — `ci.yml`, your first workflow.** Triggers on `push` and
       `pull_request`. checkout → setup-python → install deps → `pytest`.
       Adds a Python-version matrix (3.11, 3.12) and pip caching.
       *Teaches:* `on:` triggers, jobs/steps, marketplace actions, matrix
@@ -71,14 +71,14 @@ ahead, since later stages reuse things earlier stages build.
       *Verify:* open a PR, watch both matrix legs run; second run shows a
       cache hit.
 
-- [ ] **Stage 2 — `gcp-auth`, your first composite action.** Wraps the steps
+- [x] **Stage 2 — `gcp-auth`, your first composite action.** Wraps the steps
       you're about to repeat in two workflows: WIF login (`google-github-actions/auth`)
       + `gcloud` setup + Docker-to-Artifact-Registry auth.
       *Teaches:* `runs: using: composite`, action inputs/outputs, why a local
       action beats copy-pasting the same 3 steps everywhere.
       *Verify:* nothing calls it yet — confirmed once Stage 3 uses it.
 
-- [ ] **Stage 3 — `build-and-push.yml`, your first reusable workflow.**
+- [x] **Stage 3 — `build-and-push.yml`, your first reusable workflow.**
       `on: workflow_call`. checkout → call `gcp-auth` → `docker build` → tag
       with the git SHA → push to Artifact Registry → expose the tag as a job
       `output`.
@@ -86,7 +86,7 @@ ahead, since later stages reuse things earlier stages build.
       calling a composite action from inside a reusable workflow.
       *Verify:* trigger it, confirm the image lands in Artifact Registry.
 
-- [ ] **Stage 4 — `deploy.yml`, second reusable workflow + an approval gate.**
+- [x] **Stage 4 — `deploy.yml`, second reusable workflow + an approval gate.**
       Takes the image tag as input. Calls `gcp-auth` again — same action,
       second consumer. SSHes into the VM via an IAP tunnel (port 22 never
       open to the internet) and restarts the container. Job declares
@@ -97,7 +97,7 @@ ahead, since later stages reuse things earlier stages build.
       *Verify:* run shows "waiting for approval"; after approving, `curl` the
       VM's public IP on `/health`.
 
-- [ ] **Stage 5 — `release.yml`, the orchestrator.** Triggers on push to
+- [x] **Stage 5 — `release.yml`, the orchestrator.** Triggers on push to
       `main`, on `v*` tags, and manually (`workflow_dispatch`). Job `build`
       calls `build-and-push.yml`; job `deploy` (`needs: build`) calls
       `deploy.yml`, passing in `needs.build.outputs.image_tag`. Adds a

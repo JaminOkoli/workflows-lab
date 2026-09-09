@@ -1,0 +1,27 @@
+# A SCHEDULED workflow - the last major trigger type this project hasn't
+# used yet. GitHub runs this on its own clock, with no push/PR/manual
+# action needed.
+name: Nightly Health Check
+
+on:
+  # Cron syntax, in UTC: minute hour day-of-month month day-of-week.
+  # "0 6 * * *" = every day at 06:00 UTC.
+  schedule:
+    - cron: "0 6 * * *"
+  # Scheduled workflows can ALSO be run manually - handy for testing
+  # without waiting for the actual scheduled time to roll around.
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Curl the VM's health endpoint
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "http://${{ vars.GCP_VM_EXTERNAL_IP }}:8000/health")
+          echo "Response code: $STATUS"
+          if [ "$STATUS" != "200" ]; then
+            echo "Health check failed - VM did not return 200"
+            exit 1
+          fi
+          echo "VM is healthy"
