@@ -1,5 +1,7 @@
 # workflows-lab
 
+![CI](https://github.com/JaminOkoli/workflows-lab/actions/workflows/ci.yml/badge.svg)
+
 A small learning project. The point isn't the app or GCP — it's using a real,
 end-to-end pipeline as an excuse to learn GitHub Actions properly: composite
 actions, reusable workflows, matrix builds, manual approval gates, and the
@@ -97,7 +99,7 @@ ahead, since later stages reuse things earlier stages build.
       *Verify:* run shows "waiting for approval"; after approving, `curl` the
       VM's public IP on `/health`.
 
-- [x] **Stage 5 — `release.yml`, the orchestrator.** Triggers on push to
+- [ ] **Stage 5 — `release.yml`, the orchestrator.** Triggers on push to
       `main`, on `v*` tags, and manually (`workflow_dispatch`). Job `build`
       calls `build-and-push.yml`; job `deploy` (`needs: build`) calls
       `deploy.yml`, passing in `needs.build.outputs.image_tag`. Adds a
@@ -107,10 +109,11 @@ ahead, since later stages reuse things earlier stages build.
       *Verify:* push to `main`, watch build → approve → deploy end-to-end;
       push again mid-run and confirm the old run gets cancelled.
 
-- [ ] **Stage 6 — bonus round (optional).**
+- [x] **Stage 6 — bonus round.**
       `nightly-healthcheck.yml` on a `schedule:` cron, hitting the VM's
       `/health`. Plus a README note on `pull_request` vs
-      `pull_request_target` (a real security gotcha), and a status badge.
+      `pull_request_target` (a real security gotcha, see below), and a
+      status badge (top of this file).
       *Verify:* manually trigger it (scheduled workflows support
       `workflow_dispatch` too) and confirm it succeeds.
 
@@ -147,6 +150,31 @@ ahead, since later stages reuse things earlier stages build.
       new `v*` tag appears automatically, and that it kicks off a fresh
       `release.yml` run.
 
+## A security gotcha worth knowing: `pull_request` vs `pull_request_target`
+
+This project never uses `pull_request_target`, on purpose - but it's worth
+understanding why, since it's one of the most common ways a public repo's
+GitHub Actions setup gets exploited.
+
+- **`pull_request`** runs with the PR *author's* code, but a *read-only*,
+  low-privilege token, and (for a fork) no access to the base repo's secrets
+  or Variables. Safe by default, even for a stranger's PR.
+- **`pull_request_target`** runs with the *base* repo's token and full
+  secrets access, but by default checks out the *base* branch, not the PR's
+  code - it exists for cases like "comment on a PR" that need write access.
+  The exploit: if a workflow using `pull_request_target` is written to
+  explicitly check out and *run* the PR's code (a common mistake when
+  people want to, say, run tests with secrets available), a malicious PR
+  from a stranger's fork can run arbitrary code with your repo's real
+  secrets and write access.
+
+Every GCP-touching workflow here (`build-and-push.yml`, `deploy.yml`) only
+triggers via `workflow_call`/`workflow_dispatch`, never `pull_request` or
+`pull_request_target` - so forking this repo and opening a PR gives a
+stranger nothing to exploit, regardless of this distinction. `ci.yml` does
+use `pull_request`, but only ever runs `pytest` - no GCP credentials in
+reach either way.
+
 ## GCP one-time setup
 
 See [`infra/setup.md`](infra/setup.md) — plain `gcloud` commands (no
@@ -154,3 +182,4 @@ Terraform, to keep the scope on workflows, not IaC): create the project,
 enable APIs, create the Artifact Registry repo, create the VM (no public SSH
 — IAP tunnel only), create the GitHub Actions service account, and wire up
 Workload Identity Federation. No JSON key is ever created.
+
