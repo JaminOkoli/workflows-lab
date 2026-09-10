@@ -1,0 +1,100 @@
+# Triggers once, right when a PR is opened - not on every later push to it.
+# This workflow calls an EXTERNAL API (Jira) from inside a workflow, then
+# calls the GitHub API back to edit the PR itself - two patterns not used
+# anywhere else in this project so far.
+name: PR Jira Sync
+
+on:
+  pull_request:
+    types: [opened]
+
+permissions:
+  contents: read
+  # Needed to actually rewrite the PR's title/description below.
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Look for a ticket ID (e.g. WFL-1) anywhere in the branch name. If
+      # none is found, later steps just skip via "if:" - not every PR
+      # needs to reference a ticket.
+      - name: Extract Jira ticket ID from branch name
+        id: ticket
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          TICKET_ID=$(echo "$BRANCH" | grep -oE '[A-Z][A-Z0-9]+-[0-9]+' | head -n1 || true)
+          if [ -z "$TICKET_ID" ]; then
+            echo "No Jira ticket ID found in branch name '$BRANCH' - skipping."
+            echo "found=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Found ticket: $TICKET_ID"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "id=$TICKET_ID" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Basic auth to the Jira REST API: email + API token. Using API v2
+      # specifically - it returns the description as plain text, where v3
+      # uses a structured JSON format (ADF) that needs its own parser for
+      # no benefit here.
+      - name: Fetch ticket details from Jira
+        if: steps.ticket.outputs.found == 'true'
+        id: jira
+        env:
+          JIRA_SITE_URL: ${{ vars.JIRA_SITE_URL }}
+          JIRA_EMAIL: ${{ vars.JIRA_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          TICKET_ID: ${{ steps.ticket.outputs.id }}
+        run: |
+          RESPONSE=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+            "$JIRA_SITE_URL/rest/api/2/issue/$TICKET_ID?fields=summary,description")
+
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.fields.summary')
+          DESCRIPTION=$(echo "$RESPONSE" | jq -r '.fields.description // "(no description)"')
+
+          {
+            echo "summary<<EOF"
+            echo "$SUMMARY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "description<<EOF"
+            echo "$DESCRIPTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # gh pr edit rewrites the PR that triggered this run. github.token is
+      # the automatic per-run token - the pull-requests: write permission
+      # above is what allows this specific call to succeed.
+      #
+      # Summary/description are passed via env vars, not interpolated
+      # directly into the script - they came from Jira, an external
+      # source, and could contain characters (quotes, $(), backticks) that
+      # would otherwise get interpreted by the shell instead of treated as
+      # plain text.
+      - name: Rewrite PR title and description from the ticket
+        if: steps.ticket.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TICKET_ID: ${{ steps.ticket.outputs.id }}
+          SUMMARY: ${{ steps.jira.outputs.summary }}
+          DESCRIPTION: ${{ steps.jira.outputs.description }}
+          JIRA_SITE_URL: ${{ vars.JIRA_SITE_URL }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # Jira wraps plain-text blocks in {noformat}...{noformat} wiki
+          # markup - strip those markers so they don't show up literally
+          # in the PR description.
+          CLEAN_DESCRIPTION=$(echo "$DESCRIPTION" | sed 's/{noformat}//g')
+
+          # --repo is required here because this job never runs
+          # actions/checkout, so there's no local .git directory for gh to
+          # infer the repo from otherwise.
+          gh pr edit "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$TICKET_ID: $SUMMARY" \
+            --body "$CLEAN_DESCRIPTION
+
+          Jira ticket: $JIRA_SITE_URL/browse/$TICKET_ID"
