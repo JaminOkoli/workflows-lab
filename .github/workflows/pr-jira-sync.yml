@@ -84,8 +84,17 @@ jobs:
           JIRA_SITE_URL: ${{ vars.JIRA_SITE_URL }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
+          # Jira wraps plain-text blocks in {noformat}...{noformat} wiki
+          # markup - strip those markers so they don't show up literally
+          # in the PR description.
+          CLEAN_DESCRIPTION=$(echo "$DESCRIPTION" | sed 's/{noformat}//g')
+
+          # --repo is required here because this job never runs
+          # actions/checkout, so there's no local .git directory for gh to
+          # infer the repo from otherwise.
           gh pr edit "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
             --title "$TICKET_ID: $SUMMARY" \
-            --body "$DESCRIPTION
+            --body "$CLEAN_DESCRIPTION
 
           Jira ticket: $JIRA_SITE_URL/browse/$TICKET_ID"
