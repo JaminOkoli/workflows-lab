@@ -1,37 +1,201 @@
-# The ORCHESTRATOR. Nothing new syntactically beyond what you've already
-# used - this file's whole job is to chain the two reusable workflows
-# together and wire real values into them automatically, replacing the
-# manual "copy-paste into a form" testing you've been doing until now.
 name: Release
 
+# One merged PR produces one tag, one build, and one deployment. There are no
+# main-push or tag-push triggers, avoiding duplicate releases.
 on:
-  push:
+  pull_request:
+    types: [closed]
     branches: [main]
-    tags: ["v*"]
-  # The manual "Run workflow" button - useful for re-deploying the current
-  # main without needing a new commit.
   workflow_dispatch:
+    inputs:
+      release_label:
+        description: "Release label to dry-run (release:patch/minor/major)"
+        required: false
+        type: string
+      dry_run:
+        description: "Calculate/report only; do not tag, build, or deploy"
+        required: false
+        default: true
+        type: boolean
 
-# If a second push to main lands while a release is still running, cancel
-# the older, now-stale run instead of letting both finish (whichever
-# finishes last would otherwise "win" and could redeploy an old image).
+permissions:
+  contents: write
+  pull-requests: read
+
+# Serialize version calculations and never cancel a run after it may have
+# created a tag.
 concurrency:
-  group: release-${{ github.ref }}
-  cancel-in-progress: true
+  group: release-versioning
+  cancel-in-progress: false
 
 jobs:
-  # A job that calls a reusable workflow can ONLY have: needs, if,
-  # permissions, uses, with, secrets - no runs-on/steps, since all of that
-  # lives inside build-and-push.yml itself.
+  tag:
+    name: Calculate and create release tag
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true)
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.release.outputs.should_release }}
+      release_label: ${{ steps.release.outputs.release_label }}
+      previous_version: ${{ steps.release.outputs.previous_version }}
+      new_version: ${{ steps.release.outputs.new_version }}
+      commit_sha: ${{ steps.release.outputs.commit_sha }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Check out repository metadata
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Read labels and calculate next version
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_NAME: ${{ github.event_name }}
+          MANUAL_LABEL: ${{ inputs.release_label }}
+          DRY_RUN: ${{ inputs.dry_run || false }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            if ! labels=$(gh api --paginate \
+              "/repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels?per_page=100" \
+              --jq '.[].name'); then
+              echo "ERROR: GitHub API failed while reading labels for PR #${PR_NUMBER}." >&2
+              exit 1
+            fi
+          else
+            labels="${MANUAL_LABEL:-}"
+          fi
+
+          release_labels=()
+          while IFS= read -r label; do
+            case "$label" in
+              release:patch|release:minor|release:major) release_labels+=("$label") ;;
+            esac
+          done <<< "$labels"
+
+          if (( ${#release_labels[@]} == 0 )); then
+            echo "No release label selected; skipping release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "### Release skipped"
+              echo
+              echo "No release label (release:patch, release:minor, or release:major) was selected."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if (( ${#release_labels[@]} > 1 )); then
+            echo "ERROR: exactly one release label is required; found: ${release_labels[*]}" >&2
+            exit 1
+          fi
+
+          selected_label="${release_labels[0]}"
+          bump="${selected_label#release:}"
+          if ! remote_tags=$(git ls-remote --tags origin 'refs/tags/v*'); then
+            echo "ERROR: failed to read existing version tags from the repository." >&2
+            exit 1
+          fi
+          mapfile -t version_tags < <(printf '%s\n' "$remote_tags" \
+            | awk '{sub("\\^\\{\\}$", "", $2); print $2}' \
+            | sed 's#refs/tags/##' | sort -u)
+          invalid_tags=()
+          valid_versions=()
+          for tag in "${version_tags[@]}"; do
+            if [[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+              valid_versions+=("$tag")
+            elif [[ -n "$tag" ]]; then
+              invalid_tags+=("$tag")
+            fi
+          done
+          if (( ${#invalid_tags[@]} > 0 )); then
+            echo "ERROR: unexpected v* tag format(s): ${invalid_tags[*]}" >&2
+            exit 1
+          fi
+          if (( ${#valid_versions[@]} == 0 )); then
+            echo "ERROR: no existing semantic-version tag matching vMAJOR.MINOR.PATCH was found." >&2
+            exit 1
+          fi
+
+          previous_version=$(printf '%s\n' "${valid_versions[@]}" | sort -V | tail -n 1)
+          IFS=. read -r major minor patch <<< "${previous_version#v}"
+          case "$bump" in
+            patch) ((patch+=1)) ;;
+            minor) ((minor+=1)); patch=0 ;;
+            major) ((major+=1)); minor=0; patch=0 ;;
+            *) echo "ERROR: unsupported release label '$selected_label'." >&2; exit 1 ;;
+          esac
+          new_version="v${major}.${minor}.${patch}"
+          commit_sha="${{ github.event.pull_request.merge_commit_sha || github.sha }}"
+          [[ "$commit_sha" =~ ^[0-9a-fA-F]{40}$ ]] || {
+            echo "ERROR: merged commit SHA is missing or malformed: '$commit_sha'." >&2
+            exit 1
+          }
+          if git ls-remote --exit-code --tags origin "refs/tags/${new_version}" >/dev/null 2>&1; then
+            echo "ERROR: tag '${new_version}' already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+          echo "Selected label: $selected_label"
+          echo "Previous version: $previous_version"
+          echo "New version: $new_version"
+          echo "Commit SHA: $commit_sha"
+          if [[ "$DRY_RUN" == "true" ]]; then
+            echo "Dry run enabled; no tag was created."
+          else
+            git tag "$new_version" "$commit_sha"
+            if ! git push origin "refs/tags/${new_version}"; then
+              echo "ERROR: failed to create tag '${new_version}'." >&2
+              exit 1
+            fi
+            echo "Created tag: $new_version"
+          fi
+          {
+            echo "should_release=$([[ "$DRY_RUN" == "true" ]] && echo false || echo true)"
+            echo "release_label=$selected_label"
+            echo "previous_version=$previous_version"
+            echo "new_version=$new_version"
+            echo "commit_sha=$commit_sha"
+            echo "tag=$new_version"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "### Release tag"
+            echo
+            echo "| Field | Value |"
+            echo "| --- | --- |"
+            echo "| Selected label | $selected_label |"
+            echo "| Previous version | $previous_version |"
+            echo "| New version | $new_version |"
+            echo "| Commit SHA | $commit_sha |"
+            echo "| Tag | $new_version |"
+            echo "| Mode | $([[ "$DRY_RUN" == "true" ]] && echo 'dry run' || echo 'created') |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify tag points to merged commit
+        if: steps.release.outputs.should_release == 'true'
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          COMMIT_SHA: ${{ steps.release.outputs.commit_sha }}
+        run: |
+          set -Eeuo pipefail
+          actual=$(git ls-remote origin "refs/tags/${RELEASE_TAG}" | awk '{print $1}')
+          [[ "$actual" == "$COMMIT_SHA" ]] || {
+            echo "ERROR: ${RELEASE_TAG} does not point to ${COMMIT_SHA} (got ${actual:-missing})." >&2
+            exit 1
+          }
+
   build:
+    needs: tag
+    if: needs.tag.outputs.should_release == 'true'
     uses: ./.github/workflows/build-and-push.yml
     permissions:
       contents: read
       id-token: write
     with:
-      # "vars.*" reads the repo Variables you saved earlier in GitHub
-      # Settings - the same values you'd been pasting into the manual
-      # "Run workflow" form by hand until now.
+      source_ref: ${{ needs.tag.outputs.tag }}
+      image_tag: ${{ needs.tag.outputs.tag }}
       workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account_email: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}
       gcp_project_id: ${{ vars.GCP_PROJECT_ID }}
@@ -39,17 +203,13 @@ jobs:
       artifact_registry_repo: ${{ vars.GCP_AR_REPO }}
 
   deploy:
-    # Waits for "build" to finish, and can read its outputs - this is the
-    # same job-dependency mechanism as within a single workflow, just
-    # spanning two reusable-workflow calls instead of two plain jobs.
-    needs: build
+    needs: [tag, build]
+    if: needs.tag.outputs.should_release == 'true'
     uses: ./.github/workflows/deploy.yml
     permissions:
       contents: read
       id-token: write
     with:
-      # The exact image tag build-and-push.yml just pushed - no manual
-      # copy-pasting required anymore.
       image_tag: ${{ needs.build.outputs.image_tag }}
       workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
       service_account_email: ${{ vars.GCP_SERVICE_ACCOUNT_EMAIL }}

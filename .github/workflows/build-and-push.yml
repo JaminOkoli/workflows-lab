@@ -16,6 +16,16 @@ on:
     # in via `with:` when it does `uses: ./.github/workflows/build-and-push.yml`.
     # None of these are secret, so they're plain inputs, not `secrets:`.
     inputs:
+      source_ref:
+        description: "Git ref to build (normally the release tag)"
+        required: false
+        type: string
+        default: ""
+      image_tag:
+        description: "Container tag; defaults to the short commit SHA"
+        required: false
+        type: string
+        default: ""
       workload_identity_provider:
         required: true
         type: string
@@ -47,6 +57,14 @@ on:
   # ("Run workflow" button) while testing, before release.yml exists.
   workflow_dispatch:
     inputs:
+      source_ref:
+        required: false
+        type: string
+        default: ""
+      image_tag:
+        required: false
+        type: string
+        default: ""
       workload_identity_provider:
         required: true
         type: string
@@ -81,6 +99,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref || github.sha }}
 
       # Builds the full image reference once, as a step output, so every
       # later step (and the job/workflow outputs) reference the exact same
@@ -88,9 +108,10 @@ jobs:
       - name: Compute image tag
         id: vars
         run: |
-          SHORT_SHA=${GITHUB_SHA:0:7}
+          IMAGE_TAG="${{ inputs.image_tag }}"
+          if [ -z "$IMAGE_TAG" ]; then IMAGE_TAG="${GITHUB_SHA:0:7}"; fi
           HOST="${{ inputs.artifact_registry_region }}-docker.pkg.dev"
-          IMAGE="$HOST/${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.image_name }}:$SHORT_SHA"
+          IMAGE="$HOST/${{ inputs.gcp_project_id }}/${{ inputs.artifact_registry_repo }}/${{ inputs.image_name }}:$IMAGE_TAG"
           echo "Image tag: $IMAGE"
           echo "image_tag=$IMAGE" >> "$GITHUB_OUTPUT"
 
